@@ -445,9 +445,6 @@ class SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1(bpy.types.Panel):
 
     def draw_header(self, context):
         layout = self.layout
-        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'kiriengine icon.svg')
-        if os.path.exists(icon_path):
-            layout.template_icon(icon_value=load_preview_icon(icon_path), scale=1.0)
 
     def draw(self, context):
         layout = self.layout

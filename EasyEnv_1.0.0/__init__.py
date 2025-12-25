@@ -281,6 +281,223 @@ class SNA_OT_Dgs_Render_Align_Active_To_View_30B13(bpy.types.Operator):
         return self.execute(context)
 
 
+class SNA_OT_Generate_Gaussians_From_Image(bpy.types.Operator, ImportHelper):
+    """Generate 3DGS from Image - Uses ML-Sharp to generate Gaussian Splatting from a single image"""
+    bl_idname = "sna.generate_gaussians_from_image"
+    bl_label = "Generate from Image"
+    bl_description = "Generate Gaussian Splatting scene from a single image using ML-Sharp"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filter_glob: bpy.props.StringProperty(
+        default='*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff',
+        options={'HIDDEN'}
+    )
+
+    @classmethod
+    def poll(cls, context):
+        if bpy.app.version >= (3, 0, 0) and True:
+            cls.poll_message_set('')
+        return not False
+
+    def execute(self, context):
+        from pathlib import Path
+        import tempfile
+        
+        image_path = Path(self.filepath)
+        
+        # Validate input
+        if not image_path.exists():
+            self.report({'ERROR'}, f"Image file not found: {image_path}")
+            return {'CANCELLED'}
+
+        # Setup output directory
+        addon_dir = Path(__file__).parent
+        custom_export_path = context.scene.sna_generation_settings.export_path.strip()
+
+        if custom_export_path and custom_export_path != "":
+            # User specified a custom export path
+            output_dir = Path(custom_export_path)
+            if not output_dir.exists():
+                try:
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    self.report({'INFO'}, f"Created export directory: {output_dir}")
+                except Exception as e:
+                    self.report({'ERROR'}, f"Failed to create export directory: {str(e)}")
+                    return {'CANCELLED'}
+        else:
+            # Use default add-on output folder
+            output_dir = addon_dir / "ml-sharp" / "Output"
+        
+        try:
+            # Import the wrapper module
+            from . import sharp_wrapper
+            
+            # Check ml-sharp environment
+            env_status = sharp_wrapper.check_mlsharp_environment()
+            if not env_status['available']:
+                self.report({'ERROR'}, "ML-Sharp environment not available")
+                self.report({'ERROR'}, env_status['message'])
+                self.report({'ERROR'}, "Please ensure ml-sharp's Env folder exists")
+                return {'CANCELLED'}
+            
+        except ImportError as e:
+            self.report({'ERROR'}, f"ML-Sharp import error: {str(e)}")
+            self.report({'ERROR'}, "Please ensure ml-sharp directory exists")
+            return {'CANCELLED'}
+        
+        # Check if checkpoint exists
+        checkpoint_path = addon_dir / "ml-sharp" / "sharp_2572gikvuh.pt"
+        if checkpoint_path.exists():
+            self.report({'INFO'}, f"Using checkpoint: {checkpoint_path.name}")
+        else:
+            self.report({'INFO'}, "Checkpoint not found, will download default model")
+            checkpoint_path = None
+        
+        try:
+            
+            # Get device setting from scene
+            device = context.scene.sna_generation_settings.device
+
+            self.report({'INFO'}, f"Processing image: {image_path.name}")
+            self.report({'INFO'}, f"Using device: {device}")
+            self.report({'INFO'}, f"Output directory: {output_dir}")
+            self.report({'INFO'}, f"This may take a few minutes depending on your hardware...")
+
+            # Generate Gaussian Splatting
+            output_ply = sharp_wrapper.predict_gaussians_from_image(
+                image_path=image_path,
+                output_path=output_dir,
+                checkpoint_path=checkpoint_path,
+                device=device,
+                verbose=False
+            )
+            
+            self.report({'INFO'}, f"Generated PLY file: {output_ply.name}")
+            
+            # Now import the generated PLY file
+            if output_ply.exists():
+                # Store the current filepath for the import operator
+                ply_filepath = str(output_ply)
+                
+                # Import PLY using existing operator logic
+                try:
+                    bpy.ops.wm.ply_import(filepath=ply_filepath)
+                except AttributeError:
+                    self.report({'ERROR'}, "PLY importer not found. Ensure Blender 4.0 or later is used.")
+                    return {'CANCELLED'}
+                
+                # Get the imported object
+                imported_objects = [obj for obj in context.scene.objects if obj.select_get()]
+                if not imported_objects:
+                    self.report({'ERROR'}, "No objects were imported from the PLY file.")
+                    return {'CANCELLED'}
+                
+                obj = imported_objects[0]
+                if obj.type != 'MESH':
+                    self.report({'ERROR'}, "Imported object is not a mesh.")
+                    return {'CANCELLED'}
+                
+                # Apply 3DGS setup (same as Import PLY operator)
+                mesh = obj.data
+                required_attributes = ['f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity', 
+                                     'scale_0', 'scale_1', 'scale_2', 
+                                     'rot_0', 'rot_1', 'rot_2', 'rot_3']
+                
+                missing_attrs = []
+                for attr_name in required_attributes:
+                    if attr_name not in mesh.attributes:
+                        missing_attrs.append(attr_name)
+                
+                if missing_attrs:
+                    self.report({'ERROR'}, f"Missing 3DGS attributes: {', '.join(missing_attrs)}")
+                    return {'CANCELLED'}
+                
+                # Set as vertex type mesh
+                obj['3DGS_Mesh_Type'] = 'vert'
+                
+                # Create color attributes
+                SH_0 = 0.28209479177387814
+                point_count = len(mesh.vertices)
+                
+                f_dc_0_data = np.array([v.value for v in mesh.attributes['f_dc_0'].data])
+                f_dc_1_data = np.array([v.value for v in mesh.attributes['f_dc_1'].data])
+                f_dc_2_data = np.array([v.value for v in mesh.attributes['f_dc_2'].data])
+                opacity_data = np.array([v.value for v in mesh.attributes['opacity'].data])
+                
+                color_data = []
+                for i in range(point_count):
+                    R = max(0.0, min(1.0, f_dc_0_data[i] * SH_0 + 0.5))
+                    G = max(0.0, min(1.0, f_dc_1_data[i] * SH_0 + 0.5))
+                    B = max(0.0, min(1.0, f_dc_2_data[i] * SH_0 + 0.5))
+                    A = max(0.0, min(1.0, 1 / (1 + np.exp(-opacity_data[i]))))
+                    color_data.extend([R, G, B, A])
+                
+                # Create Col attribute
+                if 'Col' in mesh.attributes:
+                    mesh.attributes.remove(mesh.attributes['Col'])
+                col_attr = mesh.attributes.new(name="Col", type='FLOAT_COLOR', domain='POINT')
+                col_attr.data.foreach_set("color", color_data)
+                
+                # Create KIRI_3DGS_Paint attribute
+                if 'KIRI_3DGS_Paint' in mesh.attributes:
+                    mesh.attributes.remove(mesh.attributes['KIRI_3DGS_Paint'])
+                paint_attr = mesh.attributes.new(name="KIRI_3DGS_Paint", type='FLOAT_COLOR', domain='POINT')
+                paint_attr.data.foreach_set("color", color_data)
+                mesh.color_attributes.active_color = paint_attr
+                
+                # Add geometry node modifiers
+                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Render_GN', 'KIRI_3DGS_Render_GN', obj)
+                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Sorter_GN', 'KIRI_3DGS_Sorter_GN', obj)
+                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Adjust_Colour_And_Material', 'KIRI_3DGS_Adjust_Colour_And_Material', obj)
+                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Write F_DC_And_Merge', 'KIRI_3DGS_Write F_DC_And_Merge', obj)
+                
+                # Configure modifiers
+                obj.modifiers['KIRI_3DGS_Render_GN'].show_viewport = False
+                obj.modifiers['KIRI_3DGS_Adjust_Colour_And_Material'].show_viewport = True
+                obj.modifiers['KIRI_3DGS_Write F_DC_And_Merge'].show_viewport = False
+                obj.modifiers['KIRI_3DGS_Adjust_Colour_And_Material'].show_render = True
+                obj.modifiers['KIRI_3DGS_Write F_DC_And_Merge'].show_render = False
+                obj.modifiers['KIRI_3DGS_Render_GN']['Socket_50'] = 1
+                
+                # Set up properties
+                obj['update_rot_to_cam'] = False
+                obj.sna_dgs_object_properties.enable_active_camera_updates = False
+                obj.sna_dgs_object_properties.active_object_update_mode = 'Disable Camera Updates'
+                
+                # Append and assign material
+                if not property_exists("bpy.data.materials['KIRI_3DGS_Render_Material']", globals(), locals()):
+                    before_data = list(bpy.data.materials)
+                    bpy.ops.wm.append(
+                        directory=os.path.join(os.path.dirname(__file__), 'assets', '3DGS Render APPEND V4.blend') + r'\Material', 
+                        filename='KIRI_3DGS_Render_Material', 
+                        link=False
+                    )
+                    new_data = list(filter(lambda d: not d in before_data, list(bpy.data.materials)))
+                
+                if obj.data.materials:
+                    obj.data.materials[0] = bpy.data.materials['KIRI_3DGS_Render_Material']
+                else:
+                    obj.data.materials.append(bpy.data.materials['KIRI_3DGS_Render_Material'])
+                
+                obj.name = f"3DGS_{image_path.stem}"
+                
+                self.report({'INFO'}, f"Successfully generated and imported Gaussian Splatting: {obj.name}")
+                return {'FINISHED'}
+            else:
+                self.report({'ERROR'}, "Failed to generate PLY file")
+                return {'CANCELLED'}
+                
+        except ImportError as e:
+            self.report({'ERROR'}, f"ML-Sharp import error: {str(e)}")
+            self.report({'ERROR'}, "Please ensure ml-sharp dependencies are installed")
+            return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error generating Gaussians: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {'CANCELLED'}
+
+
 class SNA_OT_Dgs_Render_Import_Ply_E0A3A(bpy.types.Operator, ImportHelper):
     """Import PLY - Imports a .PLY file and adds 3DGS modifiers"""
     bl_idname = "sna.dgs_render_import_ply_e0a3a"
@@ -448,6 +665,23 @@ class SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+
+        # Generate section
+        box = layout.box()
+        box.label(text='Generate', icon='URL')
+
+        # Device selection
+        col = box.column(align=True)
+        col.prop(context.scene.sna_generation_settings, 'device', text='')
+
+        # Export path selection
+        col = box.column(align=True)
+        col.prop(context.scene.sna_generation_settings, 'export_path', text='Output')
+
+        # Generate button
+        row = box.row()
+        row.scale_y = 1.5
+        row.operator('sna.generate_gaussians_from_image', text='Generate PLY from Image', icon='IMAGE_DATA')
         
         # Import section
         box = layout.box()
@@ -496,20 +730,41 @@ class SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1(bpy.types.Panel):
 class SNA_GROUP_sna_dgs_object_properties_group(bpy.types.PropertyGroup):
     """Property group for 3DGS object properties"""
     active_object_update_mode: bpy.props.EnumProperty(
-        name='Active Object Update Mode', 
-        description='Controls how Gaussian Splat planes update to camera view', 
+        name='Active Object Update Mode',
+        description='Controls how Gaussian Splat planes update to camera view',
         items=[
-            ('Disable Camera Updates', 'Disable Camera Updates', 'Hide the Gaussian Splat display', 0, 0), 
-            ('Enable Camera Updates', 'Enable Camera Updates', 'Use planes to represent Gaussian Splats, facing viewport', 0, 1), 
+            ('Disable Camera Updates', 'Disable Camera Updates', 'Hide the Gaussian Splat display', 0, 0),
+            ('Enable Camera Updates', 'Enable Camera Updates', 'Use planes to represent Gaussian Splats, facing viewport', 0, 1),
             ('Show As Point Cloud', 'Show As Point Cloud', 'Show as simple point cloud', 0, 2)
-        ], 
+        ],
         update=sna_update_active_object_update_mode_868D4
     )
     enable_active_camera_updates: bpy.props.BoolProperty(
-        name='Enable Active Camera Updates', 
-        description='Automatically update active object to camera view', 
-        default=False, 
+        name='Enable Active Camera Updates',
+        description='Automatically update active object to camera view',
+        default=False,
         update=sna_update_enable_active_camera_updates_DE26E
+    )
+
+
+class SNA_GROUP_sna_generation_settings_group(bpy.types.PropertyGroup):
+    """Property group for generation settings"""
+    device: bpy.props.EnumProperty(
+        name="Device",
+        description="Device to use for Gaussian Splatting generation",
+        items=[
+            ('cuda', 'GPU (CUDA)', 'Use NVIDIA GPU - fastest if available', 'MEMORY', 0),
+            ('cpu', 'CPU', 'Use CPU - slower but always compatible', 'PREVIEW_RANGE', 1),
+            ('default', 'Auto', 'Automatically select best device', 'FILE_REFRESH', 2),
+            ('mps', 'MPS', 'Use Apple Silicon GPU if available', 'SYSTEM', 3),
+        ],
+        default='cuda'
+    )
+    export_path: bpy.props.StringProperty(
+        name="Export Path",
+        description="Directory to save generated PLY files. Leave empty to use default add-on output folder",
+        default="",
+        subtype='DIR_PATH'
     )
 
 
@@ -517,22 +772,30 @@ def register():
     """Register addon classes and properties"""
     global _icons
     _icons = bpy.utils.previews.new()
-    
+
     # Register property groups
     bpy.utils.register_class(SNA_GROUP_sna_dgs_object_properties_group)
     bpy.types.Object.sna_dgs_object_properties = bpy.props.PointerProperty(
-        name='3DGS Object Properties', 
-        description='Properties for 3DGS objects', 
+        name='3DGS Object Properties',
+        description='Properties for 3DGS objects',
         type=SNA_GROUP_sna_dgs_object_properties_group
     )
-    
+
+    bpy.utils.register_class(SNA_GROUP_sna_generation_settings_group)
+    bpy.types.Scene.sna_generation_settings = bpy.props.PointerProperty(
+        name='Generation Settings',
+        description='Settings for Gaussian Splatting generation',
+        type=SNA_GROUP_sna_generation_settings_group
+    )
+
     # Register operators
     bpy.utils.register_class(SNA_OT_Dgs_Render_Align_Active_To_View_30B13)
+    bpy.utils.register_class(SNA_OT_Generate_Gaussians_From_Image)
     bpy.utils.register_class(SNA_OT_Dgs_Render_Import_Ply_E0A3A)
-    
+
     # Register UI panel
     bpy.utils.register_class(SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1)
-    
+
     print("3DGS Render (Minimal) addon registered")
 
 
@@ -540,18 +803,22 @@ def unregister():
     """Unregister addon classes and properties"""
     global _icons
     bpy.utils.previews.remove(_icons)
-    
+
     # Unregister UI panel
     bpy.utils.unregister_class(SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1)
-    
+
     # Unregister operators
+    bpy.utils.unregister_class(SNA_OT_Generate_Gaussians_From_Image)
     bpy.utils.unregister_class(SNA_OT_Dgs_Render_Import_Ply_E0A3A)
     bpy.utils.unregister_class(SNA_OT_Dgs_Render_Align_Active_To_View_30B13)
-    
+
     # Unregister property groups
+    del bpy.types.Scene.sna_generation_settings
+    bpy.utils.unregister_class(SNA_GROUP_sna_generation_settings_group)
+
     del bpy.types.Object.sna_dgs_object_properties
     bpy.utils.unregister_class(SNA_GROUP_sna_dgs_object_properties_group)
-    
+
     print("3DGS Render (Minimal) addon unregistered")
 
 

@@ -6,10 +6,8 @@ Downloads and sets up the ML-Sharp Python environment and checkpoint.
 import os
 import sys
 import subprocess
-import urllib.request
 import zipfile
 import shutil
-import ssl
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -17,22 +15,28 @@ from typing import Optional, Callable
 ADDON_DIR = Path(__file__).parent
 MLSHARP_DIR = ADDON_DIR / "ml-sharp"
 MLSHARP_ENV_DIR = MLSHARP_DIR / "Env"
+BUNDLED_PYTHON_DIR = MLSHARP_DIR / "python_embedded"  # Bundled Python in GitHub
 
-# Python download URLs (embeddable packages)
+# Python download URLs (embeddable packages) - fallback if not bundled
 PYTHON_DOWNLOADS = {
     'win32': 'https://www.python.org/ftp/python/3.13.0/python-3.13.0-embed-amd64.zip',
     'darwin': None,  # macOS uses full installer
     'linux': None,   # Linux uses system Python or manual setup
 }
 
-# Checkpoint URL
+# Bundled files (included in GitHub repo to avoid download issues)
+BUNDLED_PYTHON_ZIP = BUNDLED_PYTHON_DIR / "python-3.13.0-embed-amd64.zip"
+BUNDLED_GET_PIP = BUNDLED_PYTHON_DIR / "get-pip.py"
+
+# Checkpoint URL (too large to bundle, must download)
 CHECKPOINT_URL = "https://huggingface.co/TimChen/ml-sharp/resolve/main/sharp_2572gikvuh.pt?download=true"
 CHECKPOINT_FILENAME = "sharp_2572gikvuh.pt"
 
 
 def download_file(url: str, destination: Path, progress_callback: Optional[Callable[[int, int], None]] = None):
     """
-    Download a file with progress tracking using manual chunked download.
+    Download a file with progress tracking using requests library.
+    Uses requests instead of urllib to avoid SSL/firewall issues.
 
     Args:
         url: URL to download from
@@ -44,30 +48,24 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
     print(f"Downloading: {url}")
     print(f"Destination: {destination}")
 
-    # Create SSL context with certificate verification
-    ssl_context = None
     try:
-        # Try to use certifi for certificate verification (Blender includes this)
+        # Import requests (bundled with Blender)
+        import requests
+        print("Using requests library for download")
+
+        # Try to import certifi for better SSL verification
         try:
             import certifi
-            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            verify_ssl = certifi.where()
             print("Using certifi for SSL verification")
         except ImportError:
-            # Fall back to default SSL context
-            ssl_context = ssl.create_default_context()
-            print("Using default SSL context")
-    except Exception as e:
-        print(f"Warning: Could not create SSL context: {e}")
-        # Create unverified context as last resort (not recommended but functional)
-        ssl_context = ssl._create_unverified_context()
-        print("Warning: Using unverified SSL context")
+            verify_ssl = True  # Use default verification
+            print("Using default SSL verification")
 
-    try:
-        # Create custom opener with SSL context
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context))
+        # Stream download to handle large files
+        with requests.get(url, stream=True, verify=verify_ssl, timeout=30) as response:
+            response.raise_for_status()
 
-        # Open the URL with the custom opener
-        with opener.open(url) as response:
             # Get total file size
             total_size = int(response.headers.get('Content-Length', 0))
             downloaded = 0
@@ -75,26 +73,38 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
 
             # Download in chunks and write to file
             with open(destination, 'wb') as f:
-                while True:
-                    chunk = response.read(block_size)
-                    if not chunk:
-                        break
+                for chunk in response.iter_content(chunk_size=block_size):
+                    if chunk:  # filter out keep-alive new chunks
+                        f.write(chunk)
+                        downloaded += len(chunk)
 
-                    f.write(chunk)
-                    downloaded += len(chunk)
+                        # Report progress
+                        if progress_callback:
+                            progress_callback(downloaded, total_size)
 
-                    # Report progress
-                    if progress_callback:
-                        progress_callback(downloaded, total_size)
-
-                    if total_size > 0:
-                        percent = min(100, (downloaded / total_size) * 100)
-                        mb_downloaded = downloaded / (1024 * 1024)
-                        mb_total = total_size / (1024 * 1024)
-                        print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
+                        if total_size > 0:
+                            percent = min(100, (downloaded / total_size) * 100)
+                            mb_downloaded = downloaded / (1024 * 1024)
+                            mb_total = total_size / (1024 * 1024)
+                            print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
 
         print("\nDownload complete!")
         return True
+
+    except ImportError:
+        print("Error: requests library not found in Blender")
+        print("Falling back to basic download without progress...")
+        # Fallback: simple download without progress tracking
+        import urllib.request
+        try:
+            urllib.request.urlretrieve(url, destination)
+            print("Download complete!")
+            return True
+        except Exception as e:
+            print(f"Download failed: {e}")
+            if destination.exists():
+                destination.unlink()
+            raise
 
     except Exception as e:
         print(f"\nDownload failed: {e}")
@@ -105,17 +115,28 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
 
 def install_python_windows(progress_callback: Optional[Callable[[str], None]] = None):
     """
-    Download and extract embeddable Python for Windows.
+    Install embeddable Python for Windows.
+    First tries to use bundled Python (from GitHub repo), then downloads if needed.
 
     Args:
         progress_callback: Optional callback for status updates
     """
-    if progress_callback:
-        progress_callback("Downloading Python 3.13 for Windows...")
+    # Check if Python is bundled in the repo
+    if BUNDLED_PYTHON_ZIP.exists():
+        if progress_callback:
+            progress_callback("Using bundled Python 3.13 (no download needed)...")
+        print(f"Found bundled Python at: {BUNDLED_PYTHON_ZIP}")
+        python_zip = BUNDLED_PYTHON_ZIP
+        cleanup_zip = False  # Don't delete bundled file
+    else:
+        if progress_callback:
+            progress_callback("Downloading Python 3.13 for Windows...")
+        print("Bundled Python not found, downloading...")
 
-    # Download embeddable Python
-    python_zip = MLSHARP_DIR / "python_embed.zip"
-    download_file(PYTHON_DOWNLOADS['win32'], python_zip)
+        # Download embeddable Python
+        python_zip = MLSHARP_DIR / "python_embed.zip"
+        download_file(PYTHON_DOWNLOADS['win32'], python_zip)
+        cleanup_zip = True  # Delete downloaded file after extraction
 
     if progress_callback:
         progress_callback("Extracting Python...")
@@ -125,8 +146,9 @@ def install_python_windows(progress_callback: Optional[Callable[[str], None]] = 
     with zipfile.ZipFile(python_zip, 'r') as zip_ref:
         zip_ref.extractall(MLSHARP_ENV_DIR)
 
-    # Clean up zip
-    python_zip.unlink()
+    # Clean up zip only if we downloaded it
+    if cleanup_zip:
+        python_zip.unlink()
 
     # Modify python313._pth to enable pip and site-packages
     pth_file = MLSHARP_ENV_DIR / "python313._pth"
@@ -148,6 +170,7 @@ def install_python_windows(progress_callback: Optional[Callable[[str], None]] = 
 def install_pip(python_exe: Path, progress_callback: Optional[Callable[[str], None]] = None):
     """
     Install pip into the embedded Python environment.
+    First tries to use bundled get-pip.py, then downloads if needed.
 
     Args:
         python_exe: Path to Python executable
@@ -156,12 +179,21 @@ def install_pip(python_exe: Path, progress_callback: Optional[Callable[[str], No
     if progress_callback:
         progress_callback("Installing pip...")
 
-    # Download get-pip.py
-    get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
-    get_pip_path = MLSHARP_ENV_DIR / "get-pip.py"
+    # Check if get-pip.py is bundled in the repo
+    if BUNDLED_GET_PIP.exists():
+        print(f"Found bundled get-pip.py at: {BUNDLED_GET_PIP}")
+        # Copy bundled file to Env directory
+        get_pip_path = MLSHARP_ENV_DIR / "get-pip.py"
+        shutil.copy(BUNDLED_GET_PIP, get_pip_path)
+        cleanup_pip = True  # Delete copy after use
+    else:
+        # Download get-pip.py
+        get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
+        get_pip_path = MLSHARP_ENV_DIR / "get-pip.py"
 
-    print("Downloading get-pip.py...")
-    download_file(get_pip_url, get_pip_path)
+        print("Downloading get-pip.py...")
+        download_file(get_pip_url, get_pip_path)
+        cleanup_pip = True
 
     # Run get-pip.py
     print("Installing pip...")
@@ -176,8 +208,9 @@ def install_pip(python_exe: Path, progress_callback: Optional[Callable[[str], No
         print(f"pip installation errors: {result.stderr}")
         raise RuntimeError(f"Failed to install pip: {result.stderr}")
 
-    # Clean up
-    get_pip_path.unlink()
+    # Clean up copy
+    if cleanup_pip and get_pip_path.exists():
+        get_pip_path.unlink()
 
     if progress_callback:
         progress_callback("pip installed successfully")

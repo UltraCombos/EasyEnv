@@ -9,6 +9,7 @@ import subprocess
 import urllib.request
 import zipfile
 import shutil
+import ssl
 from pathlib import Path
 from typing import Optional, Callable
 
@@ -43,6 +44,24 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
     print(f"Downloading: {url}")
     print(f"Destination: {destination}")
 
+    # Create SSL context with certificate verification
+    ssl_context = None
+    try:
+        # Try to use certifi for certificate verification (Blender includes this)
+        try:
+            import certifi
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            print("Using certifi for SSL verification")
+        except ImportError:
+            # Fall back to default SSL context
+            ssl_context = ssl.create_default_context()
+            print("Using default SSL context")
+    except Exception as e:
+        print(f"Warning: Could not create SSL context: {e}")
+        # Create unverified context as last resort (not recommended but functional)
+        ssl_context = ssl._create_unverified_context()
+        print("Warning: Using unverified SSL context")
+
     def report_progress(block_count, block_size, total_size):
         downloaded = block_count * block_size
         if progress_callback:
@@ -55,6 +74,10 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
             print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
 
     try:
+        # Install custom opener with SSL context
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context))
+        urllib.request.install_opener(opener)
+
         urllib.request.urlretrieve(url, destination, reporthook=report_progress)
         print("\nDownload complete!")
         return True

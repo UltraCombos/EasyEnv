@@ -76,8 +76,8 @@ def predict_gaussians_from_image(
     python_code = f"""
 import sys
 sys.path.insert(0, {repr(mlsharp_src)})
-from sharp.cli import main
-sys.exit(main())
+from sharp.cli import main_cli
+sys.exit(main_cli())
 """
 
     # Build command with arguments for sharp CLI

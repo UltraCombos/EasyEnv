@@ -798,7 +798,7 @@ class SNA_GROUP_sna_generation_settings_group(bpy.types.PropertyGroup):
             ('default', 'Auto', 'Automatically select best device', 'FILE_REFRESH', 2),
             ('mps', 'MPS', 'Use Apple Silicon GPU if available', 'SYSTEM', 3),
         ],
-        default='cuda'
+        default='default'
     )
     export_path: bpy.props.StringProperty(
         name="Export Path",

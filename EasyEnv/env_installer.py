@@ -218,6 +218,58 @@ def install_pip(python_exe: Path, progress_callback: Optional[Callable[[str], No
     return True
 
 
+def install_pytorch_cuda_windows(python_exe: Path, progress_callback: Optional[Callable[[str], None]] = None):
+    """
+    Install PyTorch with CUDA support on Windows.
+    The standard requirements.txt has Linux-only CUDA markers, so we need to
+    install PyTorch separately using the official PyTorch index.
+
+    Args:
+        python_exe: Path to Python executable
+        progress_callback: Optional callback for status updates
+    """
+    if progress_callback:
+        progress_callback("Installing PyTorch with CUDA support for Windows...")
+
+    print("Installing PyTorch 2.8.0 with CUDA 12.8 support...")
+
+    # Install PyTorch with CUDA from official PyTorch index
+    # This installs torch, torchvision, and all CUDA dependencies
+    cmd = [
+        str(python_exe),
+        "-m", "pip",
+        "install",
+        "torch==2.8.0",
+        "torchvision==0.23.0",
+        "--index-url", "https://download.pytorch.org/whl/cu128",
+        "--no-warn-script-location"
+    ]
+
+    print(f"Running: {' '.join(cmd)}")
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True
+    )
+
+    for line in process.stdout:
+        print(line.rstrip())
+
+    process.wait()
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Failed to install PyTorch with CUDA. Exit code: {process.returncode}")
+
+    if progress_callback:
+        progress_callback("PyTorch with CUDA installed successfully")
+
+    return True
+
+
 def install_requirements(python_exe: Path, requirements_file: Path, progress_callback: Optional[Callable[[str], None]] = None):
     """
     Install Python packages from requirements.txt using pip.
@@ -241,22 +293,29 @@ def install_requirements(python_exe: Path, requirements_file: Path, progress_cal
     with open(requirements_file, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    # Filter out editable install lines and comments-only lines
+    # Filter out editable install lines, comments-only lines, and packages we handle separately
     filtered_lines = []
+    packages_to_skip = ['torch', 'torchvision']  # Installed separately with CUDA on Windows
+
     for line in lines:
         stripped = line.strip()
         # Skip editable installs (-e), empty lines, and comment-only lines
         if stripped and not stripped.startswith('-e') and not stripped.startswith('#'):
-            # Keep lines that have actual package specifications
-            if not stripped.startswith('via'):  # Skip uv metadata comments
-                filtered_lines.append(line)
+            # Skip torch/torchvision (handled separately) and uv metadata
+            if not stripped.startswith('via'):
+                # Check if line starts with a package we want to skip
+                package_name = stripped.split('==')[0].split(';')[0].strip()
+                if package_name not in packages_to_skip:
+                    filtered_lines.append(line)
+                else:
+                    print(f"Skipping {package_name} (installed separately with CUDA)")
 
     # Create temporary filtered requirements file
     temp_requirements = MLSHARP_ENV_DIR / "requirements_filtered.txt"
     with open(temp_requirements, 'w', encoding='utf-8') as f:
         f.writelines(filtered_lines)
 
-    print(f"Filtered requirements (removed editable installs):")
+    print(f"Filtered requirements (removed editable installs and torch packages):")
     print(f"Original lines: {len(lines)}, Filtered lines: {len(filtered_lines)}")
 
     # Install packages using pip
@@ -362,6 +421,22 @@ def check_environment_status():
                 timeout=10
             )
             status['packages_installed'] = (result.returncode == 0 and 'OK' in result.stdout)
+
+            # Check CUDA availability (optional - just for info)
+            if status['packages_installed']:
+                try:
+                    cuda_check = subprocess.run(
+                        [str(python_exe), "-c", "import torch; print('CUDA' if torch.cuda.is_available() else 'CPU')"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if cuda_check.returncode == 0:
+                        status['cuda_available'] = 'CUDA' in cuda_check.stdout
+                    else:
+                        status['cuda_available'] = False
+                except Exception:
+                    status['cuda_available'] = False
         except Exception as e:
             print(f"Package check failed: {e}")
             status['packages_installed'] = False
@@ -400,8 +475,14 @@ def install_environment_windows(progress_callback: Optional[Callable[[str], None
                 progress_callback("Step 2/3: Installing pip...")
             install_pip(python_exe, progress_callback)
 
+            # Install PyTorch with CUDA support first (Windows-specific)
             if progress_callback:
-                progress_callback("Step 2/3: Installing Python packages...")
+                progress_callback("Step 2/3: Installing PyTorch with CUDA...")
+            install_pytorch_cuda_windows(python_exe, progress_callback)
+
+            # Then install remaining packages from requirements.txt
+            if progress_callback:
+                progress_callback("Step 2/3: Installing remaining packages...")
             requirements_file = MLSHARP_DIR / "requirements.txt"
             install_requirements(python_exe, requirements_file, progress_callback)
         else:

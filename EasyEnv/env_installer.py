@@ -301,23 +301,21 @@ def check_environment_status():
         'python_path': str(python_exe) if python_exe else "Unknown",
     }
 
-    # Check if packages are installed by trying to import sharp
+    # Check if packages are installed by trying to import core dependencies
+    # Note: We don't check for 'sharp' here because it's not installed via pip,
+    # it's loaded from ml-sharp/src/ via PYTHONPATH at runtime
     if status['python_installed']:
         try:
-            # Set up environment with ml-sharp/src in PYTHONPATH
-            env = os.environ.copy()
-            mlsharp_src = str(MLSHARP_DIR / "src")
-            env['PYTHONPATH'] = mlsharp_src
-
+            # Check for core dependencies (torch and gsplat are the main ones)
             result = subprocess.run(
-                [str(python_exe), "-c", "import sharp; import torch; import gsplat"],
+                [str(python_exe), "-c", "import torch; import gsplat; print('OK')"],
                 capture_output=True,
                 text=True,
-                timeout=10,
-                env=env
+                timeout=10
             )
-            status['packages_installed'] = (result.returncode == 0)
-        except:
+            status['packages_installed'] = (result.returncode == 0 and 'OK' in result.stdout)
+        except Exception as e:
+            print(f"Package check failed: {e}")
             status['packages_installed'] = False
 
     return status

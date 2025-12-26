@@ -32,7 +32,7 @@ CHECKPOINT_FILENAME = "sharp_2572gikvuh.pt"
 
 def download_file(url: str, destination: Path, progress_callback: Optional[Callable[[int, int], None]] = None):
     """
-    Download a file with progress tracking.
+    Download a file with progress tracking using manual chunked download.
 
     Args:
         url: URL to download from
@@ -62,25 +62,40 @@ def download_file(url: str, destination: Path, progress_callback: Optional[Calla
         ssl_context = ssl._create_unverified_context()
         print("Warning: Using unverified SSL context")
 
-    def report_progress(block_count, block_size, total_size):
-        downloaded = block_count * block_size
-        if progress_callback:
-            progress_callback(downloaded, total_size)
-
-        if total_size > 0:
-            percent = min(100, (downloaded / total_size) * 100)
-            mb_downloaded = downloaded / (1024 * 1024)
-            mb_total = total_size / (1024 * 1024)
-            print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
-
     try:
-        # Install custom opener with SSL context
+        # Create custom opener with SSL context
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ssl_context))
-        urllib.request.install_opener(opener)
 
-        urllib.request.urlretrieve(url, destination, reporthook=report_progress)
+        # Open the URL with the custom opener
+        with opener.open(url) as response:
+            # Get total file size
+            total_size = int(response.headers.get('Content-Length', 0))
+            downloaded = 0
+            block_size = 8192  # 8KB chunks
+
+            # Download in chunks and write to file
+            with open(destination, 'wb') as f:
+                while True:
+                    chunk = response.read(block_size)
+                    if not chunk:
+                        break
+
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+                    # Report progress
+                    if progress_callback:
+                        progress_callback(downloaded, total_size)
+
+                    if total_size > 0:
+                        percent = min(100, (downloaded / total_size) * 100)
+                        mb_downloaded = downloaded / (1024 * 1024)
+                        mb_total = total_size / (1024 * 1024)
+                        print(f"\rDownloading: {percent:.1f}% ({mb_downloaded:.1f}/{mb_total:.1f} MB)", end='')
+
         print("\nDownload complete!")
         return True
+
     except Exception as e:
         print(f"\nDownload failed: {e}")
         if destination.exists():

@@ -398,7 +398,7 @@ class SNA_OT_Generate_Gaussians_From_Image(bpy.types.Operator, ImportHelper):
                 import math
                 try:
                     obj.rotation_mode = 'XYZ'
-                    obj.rotation_euler.x += math.radians(90)
+                    obj.rotation_euler.x += math.radians(-90)
                 except Exception:
                     pass
 

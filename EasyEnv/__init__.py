@@ -281,6 +281,103 @@ class SNA_OT_Dgs_Render_Align_Active_To_View_30B13(bpy.types.Operator):
         return self.execute(context)
 
 
+class SNA_OT_Install_Environment(bpy.types.Operator):
+    """Install ML-Sharp Environment - Downloads and installs Python environment and checkpoint"""
+    bl_idname = "sna.install_environment"
+    bl_label = "Install Environment"
+    bl_description = "Download and install ML-Sharp Python environment and checkpoint file"
+    bl_options = {"REGISTER"}
+
+    _timer = None
+    _thread = None
+    _status_message = "Starting installation..."
+    _is_running = False
+    _error_message = None
+    _success = False
+
+    def modal(self, context, event):
+        if event.type == 'TIMER':
+            # Update UI with current status
+            context.area.tag_redraw()
+
+            # Check if installation thread is still running
+            if not self._is_running:
+                # Installation finished
+                self.cancel(context)
+
+                if self._success:
+                    self.report({'INFO'}, "Environment installation complete!")
+                    return {'FINISHED'}
+                else:
+                    error_msg = self._error_message or "Unknown error"
+                    self.report({'ERROR'}, f"Installation failed: {error_msg}")
+                    return {'CANCELLED'}
+
+        return {'PASS_THROUGH'}
+
+    def execute(self, context):
+        import threading
+        import sys
+
+        # Check platform support
+        if sys.platform != 'win32':
+            self.report({'ERROR'}, "Automatic installation is currently only supported on Windows")
+            self.report({'INFO'}, "Please install manually: see documentation")
+            return {'CANCELLED'}
+
+        # Import installer module
+        try:
+            from . import env_installer
+        except ImportError as e:
+            self.report({'ERROR'}, f"Failed to import installer: {e}")
+            return {'CANCELLED'}
+
+        # Check current status
+        status = env_installer.check_environment_status()
+
+        if status['python_installed'] and status['packages_installed'] and status['checkpoint_exists']:
+            self.report({'INFO'}, "Environment is already fully installed!")
+            return {'FINISHED'}
+
+        # Define installation function to run in thread
+        def install_thread():
+            try:
+                def progress_callback(message):
+                    self._status_message = message
+                    print(f"[Install] {message}")
+
+                self._is_running = True
+                env_installer.install_environment_windows(progress_callback)
+                self._success = True
+
+            except Exception as e:
+                self._error_message = str(e)
+                self._success = False
+                import traceback
+                traceback.print_exc()
+            finally:
+                self._is_running = False
+
+        # Start installation in background thread
+        self._thread = threading.Thread(target=install_thread, daemon=True)
+        self._thread.start()
+
+        # Set up modal timer
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.5, window=context.window)
+        wm.modal_handler_add(self)
+
+        self.report({'INFO'}, "Installing environment... This may take 10-15 minutes")
+        self.report({'INFO'}, "Check the system console for progress")
+
+        return {'RUNNING_MODAL'}
+
+    def cancel(self, context):
+        wm = context.window_manager
+        if self._timer:
+            wm.event_timer_remove(self._timer)
+
+
 class SNA_OT_Generate_Gaussians_From_Image(bpy.types.Operator, ImportHelper):
     """Generate 3DGS from Image - Uses ML-Sharp to generate Gaussian Splatting from a single image"""
     bl_idname = "sna.generate_gaussians_from_image"
@@ -535,6 +632,43 @@ class SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
 
+        # Check environment status
+        try:
+            from . import env_installer
+            status = env_installer.check_environment_status()
+            env_ready = status['python_installed'] and status['packages_installed'] and status['checkpoint_exists']
+        except:
+            env_ready = False
+            status = {'python_installed': False, 'packages_installed': False, 'checkpoint_exists': False}
+
+        # Environment status section (show if not fully installed)
+        if not env_ready:
+            box = layout.box()
+            box.label(text='Environment Setup', icon='PREFERENCES')
+
+            col = box.column(align=True)
+            if not status['python_installed']:
+                col.label(text='Python: Not Installed', icon='CANCEL')
+            else:
+                col.label(text='Python: Installed', icon='CHECKMARK')
+
+            if not status['packages_installed']:
+                col.label(text='Packages: Not Installed', icon='CANCEL')
+            else:
+                col.label(text='Packages: Installed', icon='CHECKMARK')
+
+            if not status['checkpoint_exists']:
+                col.label(text='Checkpoint: Not Downloaded', icon='CANCEL')
+            else:
+                col.label(text='Checkpoint: Downloaded', icon='CHECKMARK')
+
+            # Install Environment button
+            row = box.row()
+            row.scale_y = 1.5
+            row.operator('sna.install_environment', text='Install Environment', icon='IMPORT')
+
+            layout.separator()
+
         # Generate section
         box = layout.box()
         box.label(text='Generate', icon='URL')
@@ -550,8 +684,9 @@ class SNA_PT_DGS_RENDER_BY_KIRI_ENGINE_6D2B1(bpy.types.Panel):
         # Generate button
         row = box.row()
         row.scale_y = 1.5
+        row.enabled = env_ready  # Disable if environment not ready
         row.operator('sna.generate_gaussians_from_image', text='Generate PLY from Image', icon='IMAGE_DATA')
-        
+
         # (Import PLY button removed)
         
         # Active object controls
@@ -649,6 +784,7 @@ def register():
 
     # Register operators
     bpy.utils.register_class(SNA_OT_Dgs_Render_Align_Active_To_View_30B13)
+    bpy.utils.register_class(SNA_OT_Install_Environment)
     bpy.utils.register_class(SNA_OT_Generate_Gaussians_From_Image)
 
     # Register UI panel
@@ -667,7 +803,7 @@ def unregister():
 
     # Unregister operators
     bpy.utils.unregister_class(SNA_OT_Generate_Gaussians_From_Image)
-    
+    bpy.utils.unregister_class(SNA_OT_Install_Environment)
     bpy.utils.unregister_class(SNA_OT_Dgs_Render_Align_Active_To_View_30B13)
 
     # Unregister property groups

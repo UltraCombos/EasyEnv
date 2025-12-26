@@ -1,5 +1,56 @@
-# Ignore the entire Env directory
+# Python environment (will be installed by user via "Install Environment" button)
 EasyEnv/ml-sharp/Env/
+EasyEnv/ml-sharp/env/
 
-# Ignore the specific .pt file
-EasyEnv/ml-sharp/sharp_2572gikvuh.pt
+# ML-Sharp checkpoint (will be downloaded from HuggingFace)
+EasyEnv/ml-sharp/*.pt
+EasyEnv/ml-sharp/*.pth
+EasyEnv/ml-sharp/sharp_*.pt
+
+# Temporary download files
+EasyEnv/ml-sharp/python_embed.zip
+EasyEnv/ml-sharp/get-pip.py
+
+# Output files
+EasyEnv/ml-sharp/Output/
+EasyEnv/ml-sharp/Input/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Blender temporary files
+*.blend1
+*.blend2

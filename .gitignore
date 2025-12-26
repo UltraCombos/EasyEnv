@@ -1,5 +1,5 @@
 # Ignore the entire Env directory
-EasyEnv_1.0.0/ml-sharp/Env/
+EasyEnv/ml-sharp/Env/
 
 # Ignore the specific .pt file
-EasyEnv_1.0.0/ml-sharp/sharp_2572gikvuh.pt
+EasyEnv/ml-sharp/sharp_2572gikvuh.pt

@@ -604,16 +604,12 @@ class EASYENV_OT_Generate_Gaussians_From_Image(bpy.types.Operator, ImportHelper)
                 
                 # Add geometry node modifiers
                 sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Render_GN', 'KIRI_3DGS_Render_GN', obj)
-                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Sorter_GN', 'KIRI_3DGS_Sorter_GN', obj)
                 sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Adjust_Colour_And_Material', 'KIRI_3DGS_Adjust_Colour_And_Material', obj)
-                sna_append_and_add_geo_nodes_function_execute_6BCD7('KIRI_3DGS_Write F_DC_And_Merge', 'KIRI_3DGS_Write F_DC_And_Merge', obj)
                 
                 # Configure modifiers
                 obj.modifiers['KIRI_3DGS_Render_GN'].show_viewport = False
                 obj.modifiers['KIRI_3DGS_Adjust_Colour_And_Material'].show_viewport = True
-                obj.modifiers['KIRI_3DGS_Write F_DC_And_Merge'].show_viewport = False
                 obj.modifiers['KIRI_3DGS_Adjust_Colour_And_Material'].show_render = True
-                obj.modifiers['KIRI_3DGS_Write F_DC_And_Merge'].show_render = False
                 obj.modifiers['KIRI_3DGS_Render_GN']['Socket_50'] = 1
                 
                 # Set up properties
@@ -629,10 +625,6 @@ class EASYENV_OT_Generate_Gaussians_From_Image(bpy.types.Operator, ImportHelper)
                         filename='KIRI_3DGS_Render_Material',
                         link=False
                     )
-
-                # Configure sorter based on material render method
-                obj.modifiers['KIRI_3DGS_Sorter_GN'].show_viewport = (bpy.data.materials['KIRI_3DGS_Render_Material'].surface_render_method == 'BLENDED')
-                obj.modifiers['KIRI_3DGS_Sorter_GN'].show_render = (bpy.data.materials['KIRI_3DGS_Render_Material'].surface_render_method == 'BLENDED')
 
                 # Remove existing material slots and assign KIRI material
                 while len(obj.material_slots) > 0:

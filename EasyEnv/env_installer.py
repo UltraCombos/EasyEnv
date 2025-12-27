@@ -31,6 +31,7 @@ BUNDLED_GET_PIP = BUNDLED_PYTHON_DIR / "get-pip.py"
 # Checkpoint URL (too large to bundle, must download)
 CHECKPOINT_URL = "https://huggingface.co/TimChen/ml-sharp/resolve/main/sharp_2572gikvuh.pt?download=true"
 CHECKPOINT_FILENAME = "sharp_2572gikvuh.pt"
+CHECKPOINT_EXPECTED_SIZE = 2809738232  # 2.6168 GB - exact file size for validation
 
 
 def download_file(url: str, destination: Path, progress_callback: Optional[Callable[[int, int], None]] = None):
@@ -383,6 +384,28 @@ def download_checkpoint(progress_callback: Optional[Callable[[str], None]] = Non
     return checkpoint_path
 
 
+def is_checkpoint_complete() -> bool:
+    """
+    Check if the checkpoint file is fully downloaded by validating both existence and file size.
+
+    Returns:
+        bool: True if checkpoint exists and has the expected file size, False otherwise
+    """
+    checkpoint_path = MLSHARP_DIR / CHECKPOINT_FILENAME
+
+    # First check if file exists
+    if not checkpoint_path.exists():
+        return False
+
+    # Check if file size matches expected size (prevents false positive during download)
+    try:
+        actual_size = checkpoint_path.stat().st_size
+        return actual_size == CHECKPOINT_EXPECTED_SIZE
+    except OSError:
+        # File might be locked or inaccessible during download
+        return False
+
+
 def get_python_executable() -> Optional[Path]:
     """Get the expected Python executable path for current platform."""
     if os.name == 'nt':  # Windows
@@ -399,12 +422,11 @@ def check_environment_status():
         dict: Status with keys 'python_installed', 'packages_installed', 'checkpoint_exists'
     """
     python_exe = get_python_executable()
-    checkpoint_path = MLSHARP_DIR / CHECKPOINT_FILENAME
 
     status = {
         'python_installed': python_exe.exists() if python_exe else False,
         'packages_installed': False,
-        'checkpoint_exists': checkpoint_path.exists(),
+        'checkpoint_exists': is_checkpoint_complete(),
         'python_path': str(python_exe) if python_exe else "Unknown",
     }
 

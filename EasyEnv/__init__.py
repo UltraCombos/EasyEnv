@@ -730,10 +730,10 @@ class EASYENV_PT_Main_Panel(bpy.types.Panel):
         # Active object controls
         if context.view_layer.objects.active and 'update_rot_to_cam' in context.view_layer.objects.active:
             obj = context.view_layer.objects.active
-            
+
             box = layout.box()
             box.label(text=f'Active: {obj.name}', icon='OBJECT_DATA')
-            
+
             # Camera update mode
             col = box.column()
             col.prop(obj.easyenv_dgs_object_properties, 'active_object_update_mode', text='')
@@ -751,6 +751,23 @@ class EASYENV_PT_Main_Panel(bpy.types.Panel):
                     op = row.operator('easyenv.align_active_to_view',
                                     text='Update Active To View',
                                     icon='RESTRICT_VIEW_OFF')
+
+            # Color adjustment controls
+            if 'KIRI_3DGS_Adjust_Colour_And_Material' in obj.modifiers:
+                layout.separator()
+
+                box = layout.box()
+                box.label(text='Color Adjustment', icon='NODE_MATERIAL')
+
+                modifier = obj.modifiers['KIRI_3DGS_Adjust_Colour_And_Material']
+
+                # Basic color adjustments
+                col = box.column(align=True)
+                col.prop(modifier, '["Socket_6"]', text='Brightness')
+                col.prop(modifier, '["Socket_2"]', text='Contrast')
+                col.prop(modifier, '["Socket_4"]', text='Hue')
+                col.prop(modifier, '["Socket_3"]', text='Saturation')
+
             
 
 class EASYENV_GROUP_dgs_object_properties(bpy.types.PropertyGroup):

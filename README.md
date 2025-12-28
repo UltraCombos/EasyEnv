@@ -23,7 +23,7 @@ Although the Add On support CPU, still highly recommend using GPU for faster 3D 
 ### Installation
 <img width="657" height="258" alt="InstallFromDisk" src="https://github.com/user-attachments/assets/223d4564-ec89-4379-baeb-7797100a1cdc" />
 
-1. Download the zip file from GitHub Realses page
+1. Download the zip file from GitHub Releases page
 2. Go to Preferences, Add-ons, Install from disk and choose the downloaded zip file
 
 ### Use

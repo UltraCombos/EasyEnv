@@ -5,18 +5,32 @@ EasyEnv is a Blender Add On which can generate 3D gaussain splatting environment
 
 
 ## Prerequisite
+```diff
+Although the Add On support CPU, still highly recommend using GPU. It will be much faster.
+```
 - ***Tested Platform*** : Windows
-- ***Suggested GPU*** : NVIDIA RTX series or GTX 16 series or newer (Tested on RTX 2070)
-- ***GPU drivers*** : NVIDIA driver version 525.60.13 or newer (for CUDA 12.x support)
 - ***Blender Version*** : 4.3 and above (4.4, 4.5, 5.0...)
-- ***Suggested Blender Render*** : EEVEE
 - ***Full File Size*** : 10GB (after all models and packages downloaded)
+- ***Suggested GPU*** : NVIDIA RTX series or GTX 16 series or newer (Tested on RTX 2070)
+- ***Suggested GPU drivers*** : NVIDIA driver version 525.60.13 or newer (for CUDA 12.x support)
+- ***Suggested Blender Render*** : EEVEE
+
 
 ## Installation & Use
 
 (add tutorial video here)
-(UI image here)
 
+<img width="921" height="239" alt="UI_Panel" src="https://github.com/user-attachments/assets/2bb67591-66e1-4019-aaa5-4ced80bd6d13" />
+
+0. Download the zip file from GitHub Realse page 
+1. `Environment Checking Panel` : Checking the status of installation. If all the files got installed, this panel will be gone
+2. `Install Environment Button` : Install all the files needed for this Add On with internet (It's self-contained. Won't affect your computer's system)
+3. `Device Mode` : Choose to generate 3D scene with GPU or CPU
+4. `Output Folder` : Choose the output folder for the generated 3D scene file
+5. `Generate Button` : Choose an image and start generate 3D scene
+6. `View Mode` : Choose to display 3D scene as Gaussian Splats or Point Clouds (need to select the object first)
+7. `Update Splats Direction` : Update Gaussian Splats to face the viewport (need to select the object first)
+8. `Color Adjustment` : Adjust the brightness, contrast, hue and saturation of the Gaussian Splats (need to select the object first)
 
 
 ## Manual Installation

@@ -219,6 +219,48 @@ def install_pip(python_exe: Path, progress_callback: Optional[Callable[[str], No
     return True
 
 
+def install_setuptools(python_exe: Path, progress_callback: Optional[Callable[[str], None]] = None):
+    """
+    Install setuptools and wheel before installing other packages.
+    These are required to build packages from source (e.g., MarkupSafe).
+
+    Args:
+        python_exe: Path to Python executable
+        progress_callback: Optional callback for status updates
+    """
+    if progress_callback:
+        progress_callback("Installing build tools (setuptools, wheel)...")
+
+    print("Installing setuptools and wheel (required for building packages from source)...")
+
+    cmd = [
+        str(python_exe),
+        "-m", "pip",
+        "install",
+        "setuptools",
+        "wheel",
+        "--no-warn-script-location"
+    ]
+
+    print(f"Running: {' '.join(cmd)}")
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        print(f"Build tools installation output: {result.stdout}")
+        print(f"Build tools installation errors: {result.stderr}")
+        raise RuntimeError(f"Failed to install setuptools and wheel: {result.stderr}")
+
+    if progress_callback:
+        progress_callback("Build tools installed successfully")
+
+    return True
+
+
 def install_pytorch_cuda_windows(python_exe: Path, progress_callback: Optional[Callable[[str], None]] = None):
     """
     Install PyTorch with CUDA support on Windows.
@@ -497,7 +539,12 @@ def install_environment_windows(progress_callback: Optional[Callable[[str], None
                 progress_callback("Step 2/3: Installing pip...")
             install_pip(python_exe, progress_callback)
 
-            # Install PyTorch with CUDA support first (Windows-specific)
+            # Install build tools first (required for building packages from source)
+            if progress_callback:
+                progress_callback("Step 2/3: Installing build tools...")
+            install_setuptools(python_exe, progress_callback)
+
+            # Install PyTorch with CUDA support (Windows-specific)
             if progress_callback:
                 progress_callback("Step 2/3: Installing PyTorch with CUDA...")
             install_pytorch_cuda_windows(python_exe, progress_callback)

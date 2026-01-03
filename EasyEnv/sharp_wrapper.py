@@ -127,9 +127,16 @@ sys.exit(main_cli())
         
         # Find generated PLY file
         output_ply = output_path / f"{image_path.stem}.ply"
-        
+
         if output_ply.exists():
             print(f"Successfully generated: {output_ply.name}")
+
+            # Convert to industry-standard PLY format for compatibility
+            # with Houdini, SuperSplat, and other 3DGS software
+            print("Converting to industry-standard PLY format...")
+            standardize_ply_format(output_ply, verbose=verbose)
+            print(f"PLY format standardized: {output_ply.name}")
+
             return output_ply
         else:
             raise RuntimeError(f"Expected output PLY not found: {output_ply}")
@@ -187,13 +194,13 @@ def check_mlsharp_environment():
 def verify_sharp_package():
     """
     Verify that sharp package is available in ml-sharp environment.
-    
+
     Returns:
         bool: True if sharp package is available
     """
     if not MLSHARP_PYTHON.exists():
         return False
-    
+
     try:
         result = subprocess.run(
             [str(MLSHARP_PYTHON), "-c", "import sharp; print(sharp.__file__)"],
@@ -204,3 +211,175 @@ def verify_sharp_package():
         return result.returncode == 0
     except:
         return False
+
+
+def standardize_ply_format(ply_path: Path, verbose: bool = False) -> bool:
+    """
+    Convert ML-Sharp PLY format to industry-standard 3DGS PLY format.
+
+    This function:
+    1. Removes non-standard elements (extrinsic, intrinsic, etc.)
+    2. Reorders properties to standard order
+    3. Converts quaternions from WXYZ (ML-Sharp) to XYZW (industry standard)
+    4. Filters out any NaN/Infinity values
+
+    Args:
+        ply_path: Path to PLY file to standardize (modified in-place)
+        verbose: Enable verbose logging
+
+    Returns:
+        bool: True if successful
+
+    Raises:
+        RuntimeError: If standardization fails
+    """
+    if not MLSHARP_PYTHON.exists():
+        raise FileNotFoundError(f"ML-Sharp Python not found: {MLSHARP_PYTHON}")
+
+    if not ply_path.exists():
+        raise FileNotFoundError(f"PLY file not found: {ply_path}")
+
+    # Python code to run in ml-sharp environment (has plyfile and numpy)
+    python_code = '''
+import sys
+import numpy as np
+from plyfile import PlyData, PlyElement
+
+def standardize_ply(input_path, output_path):
+    """Convert ML-Sharp PLY to industry-standard format."""
+
+    # Read original PLY
+    plydata = PlyData.read(input_path)
+
+    # Get vertex data
+    if 'vertex' not in plydata:
+        raise ValueError("PLY file has no vertex element")
+
+    vertex = plydata['vertex']
+    data = vertex.data
+    num_points = len(data)
+
+    if num_points == 0:
+        raise ValueError("PLY file has no vertices")
+
+    # Check required properties exist
+    required = ['x', 'y', 'z', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
+                'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3']
+
+    available_props = list(data.dtype.names)
+    missing = [p for p in required if p not in available_props]
+    if missing:
+        raise ValueError(f"Missing required properties: {missing}")
+
+    # Filter out NaN/Infinity values
+    valid_mask = np.ones(num_points, dtype=bool)
+    for prop in required:
+        valid_mask &= np.isfinite(data[prop])
+
+    filtered_data = data[valid_mask]
+    num_valid = len(filtered_data)
+    num_removed = num_points - num_valid
+
+    if num_valid == 0:
+        raise ValueError("All vertices contain NaN/Infinity values")
+
+    # Define industry-standard property order
+    dtype_standard = [
+        ('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
+        ('scale_0', '<f4'), ('scale_1', '<f4'), ('scale_2', '<f4'),
+        ('rot_0', '<f4'), ('rot_1', '<f4'), ('rot_2', '<f4'), ('rot_3', '<f4'),
+        ('f_dc_0', '<f4'), ('f_dc_1', '<f4'), ('f_dc_2', '<f4'),
+        ('opacity', '<f4'),
+    ]
+
+    # Create new structured array with standard order
+    new_data = np.empty(num_valid, dtype=dtype_standard)
+
+    # Copy position, scale, color, opacity as-is
+    for prop in ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2',
+                 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity']:
+        new_data[prop] = filtered_data[prop]
+
+    # Convert quaternion from WXYZ (ML-Sharp) to XYZW (industry standard)
+    # ML-Sharp: rot_0=w, rot_1=x, rot_2=y, rot_3=z
+    # Standard: rot_0=x, rot_1=y, rot_2=z, rot_3=w
+    new_data['rot_0'] = filtered_data['rot_1']  # x
+    new_data['rot_1'] = filtered_data['rot_2']  # y
+    new_data['rot_2'] = filtered_data['rot_3']  # z
+    new_data['rot_3'] = filtered_data['rot_0']  # w
+
+    # Create clean PLY with only vertex element
+    vertex_element = PlyElement.describe(new_data, 'vertex')
+    clean_ply = PlyData([vertex_element], text=False)
+    clean_ply.write(output_path)
+
+    return num_valid, num_removed
+
+if __name__ == "__main__":
+    input_path = sys.argv[1]
+    output_path = sys.argv[2]
+    verbose = len(sys.argv) > 3 and sys.argv[3] == "-v"
+
+    try:
+        num_valid, num_removed = standardize_ply(input_path, output_path)
+        if verbose:
+            print(f"Standardized PLY: {num_valid} vertices")
+            if num_removed > 0:
+                print(f"Removed {num_removed} invalid vertices (NaN/Infinity)")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+'''
+
+    # Create a temporary file for the standardized output
+    temp_output = ply_path.with_suffix('.ply.tmp')
+
+    cmd = [
+        str(MLSHARP_PYTHON),
+        "-c", python_code,
+        str(ply_path),
+        str(temp_output)
+    ]
+
+    if verbose:
+        cmd.append("-v")
+        print(f"Standardizing PLY format: {ply_path.name}")
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60
+        )
+
+        if verbose and result.stdout:
+            print(result.stdout.strip())
+
+        # Replace original file with standardized version
+        if temp_output.exists():
+            import shutil
+            shutil.move(str(temp_output), str(ply_path))
+            return True
+        else:
+            raise RuntimeError("Standardized PLY file was not created")
+
+    except subprocess.CalledProcessError as e:
+        # Clean up temp file if it exists
+        if temp_output.exists():
+            temp_output.unlink()
+
+        error_msg = f"PLY standardization failed with exit code {e.returncode}\n"
+        if e.stdout:
+            error_msg += f"Output: {e.stdout}\n"
+        if e.stderr:
+            error_msg += f"Error: {e.stderr}"
+        raise RuntimeError(error_msg)
+
+    except Exception as e:
+        # Clean up temp file if it exists
+        if temp_output.exists():
+            temp_output.unlink()
+        raise RuntimeError(f"Unexpected error during PLY standardization: {e}")

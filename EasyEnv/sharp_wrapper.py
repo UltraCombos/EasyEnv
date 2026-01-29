@@ -212,7 +212,6 @@ def verify_sharp_package():
     except:
         return False
 
-
 def standardize_ply_format(ply_path: Path, verbose: bool = False) -> bool:
     """
     Convert ML-Sharp PLY format to industry-standard 3DGS PLY format.
@@ -245,91 +244,72 @@ import sys
 import numpy as np
 from plyfile import PlyData, PlyElement
 
+def save_as_splat(data, output_path):
+    """Save to 32-byte per splat binary format for Unity/Web."""
+    with open(output_path, 'wb') as f:
+        for row in data:
+            # 1. Position (x, y, z) - 12 bytes
+            f.write(np.float32(row['x']).tobytes())
+            f.write(np.float32(row['y']).tobytes())
+            f.write(np.float32(row['z']).tobytes())
+            
+            # 2. Scale (exp conversion) - 12 bytes
+            f.write(np.exp(np.float32(row['scale_0'])).tobytes())
+            f.write(np.exp(np.float32(row['scale_1'])).tobytes())
+            f.write(np.exp(np.float32(row['scale_2'])).tobytes())
+            
+            # 3. Color & Opacity (RGBA) - 4 bytes
+            SH_C0 = 0.28209479177387814
+            r = np.clip((0.5 + SH_C0 * row['f_dc_0']) * 255, 0, 255).astype(np.uint8)
+            g = np.clip((0.5 + SH_C0 * row['f_dc_1']) * 255, 0, 255).astype(np.uint8)
+            b = np.clip((0.5 + SH_C0 * row['f_dc_2']) * 255, 0, 255).astype(np.uint8)
+            a = np.clip((1 / (1 + np.exp(-row['opacity']))) * 255, 0, 255).astype(np.uint8)
+            f.write(r.tobytes()); f.write(g.tobytes()); f.write(b.tobytes()); f.write(a.tobytes())
+            
+            # 4. Rotation (XYZW) - 4 bytes
+            # Mapping based on standardize_ply logic: rot_1, 2, 3 are XYZ, rot_0 is W
+            q = np.array([row['rot_1'], row['rot_2'], row['rot_3'], row['rot_0']], dtype=np.float32)
+            mag = np.linalg.norm(q)
+            if mag > 0: q /= mag
+            rot_bytes = (q * 128 + 128).clip(0, 255).astype(np.uint8)
+            f.write(rot_bytes.tobytes())
+
 def standardize_ply(input_path, output_path):
-    """Convert ML-Sharp PLY to industry-standard format."""
-
-    # Read original PLY
     plydata = PlyData.read(input_path)
-
-    # Get vertex data
-    if 'vertex' not in plydata:
-        raise ValueError("PLY file has no vertex element")
-
-    vertex = plydata['vertex']
-    data = vertex.data
+    if 'vertex' not in plydata: raise ValueError("No vertex element")
+    
+    data = plydata['vertex'].data
     num_points = len(data)
-
-    if num_points == 0:
-        raise ValueError("PLY file has no vertices")
-
-    # Check required properties exist
-    required = ['x', 'y', 'z', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
+    
+    # Filter NaNs
+    required = ['x', 'y', 'z', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity', 
                 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3']
-
-    available_props = list(data.dtype.names)
-    missing = [p for p in required if p not in available_props]
-    if missing:
-        raise ValueError(f"Missing required properties: {missing}")
-
-    # Filter out NaN/Infinity values
     valid_mask = np.ones(num_points, dtype=bool)
-    for prop in required:
-        valid_mask &= np.isfinite(data[prop])
-
+    for prop in required: valid_mask &= np.isfinite(data[prop])
     filtered_data = data[valid_mask]
-    num_valid = len(filtered_data)
-    num_removed = num_points - num_valid
 
-    if num_valid == 0:
-        raise ValueError("All vertices contain NaN/Infinity values")
+    # Save Standard PLY
+    dtype_standard = [('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
+                      ('scale_0', '<f4'), ('scale_1', '<f4'), ('scale_2', '<f4'),
+                      ('rot_0', '<f4'), ('rot_1', '<f4'), ('rot_2', '<f4'), ('rot_3', '<f4'),
+                      ('f_dc_0', '<f4'), ('f_dc_1', '<f4'), ('f_dc_2', '<f4'), ('opacity', '<f4')]
+    new_data = np.empty(len(filtered_data), dtype=dtype_standard)
+    for p in ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2', 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity']:
+        new_data[p] = filtered_data[p]
+    
+    # ML-Sharp WXYZ to Standard XYZW
+    new_data['rot_0'] = filtered_data['rot_1'] # x
+    new_data['rot_1'] = filtered_data['rot_2'] # y
+    new_data['rot_2'] = filtered_data['rot_3'] # z
+    new_data['rot_3'] = filtered_data['rot_0'] # w
 
-    # Define industry-standard property order
-    dtype_standard = [
-        ('x', '<f4'), ('y', '<f4'), ('z', '<f4'),
-        ('scale_0', '<f4'), ('scale_1', '<f4'), ('scale_2', '<f4'),
-        ('rot_0', '<f4'), ('rot_1', '<f4'), ('rot_2', '<f4'), ('rot_3', '<f4'),
-        ('f_dc_0', '<f4'), ('f_dc_1', '<f4'), ('f_dc_2', '<f4'),
-        ('opacity', '<f4'),
-    ]
-
-    # Create new structured array with standard order
-    new_data = np.empty(num_valid, dtype=dtype_standard)
-
-    # Copy position, scale, color, opacity as-is
-    for prop in ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2',
-                 'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity']:
-        new_data[prop] = filtered_data[prop]
-
-    # Convert quaternion from WXYZ (ML-Sharp) to XYZW (industry standard)
-    # ML-Sharp: rot_0=w, rot_1=x, rot_2=y, rot_3=z
-    # Standard: rot_0=x, rot_1=y, rot_2=z, rot_3=w
-    new_data['rot_0'] = filtered_data['rot_1']  # x
-    new_data['rot_1'] = filtered_data['rot_2']  # y
-    new_data['rot_2'] = filtered_data['rot_3']  # z
-    new_data['rot_3'] = filtered_data['rot_0']  # w
-
-    # Create clean PLY with only vertex element
     vertex_element = PlyElement.describe(new_data, 'vertex')
-    clean_ply = PlyData([vertex_element], text=False)
-    clean_ply.write(output_path)
-
-    return num_valid, num_removed
-
-if __name__ == "__main__":
-    input_path = sys.argv[1]
-    output_path = sys.argv[2]
-    verbose = len(sys.argv) > 3 and sys.argv[3] == "-v"
-
-    try:
-        num_valid, num_removed = standardize_ply(input_path, output_path)
-        if verbose:
-            print(f"Standardized PLY: {num_valid} vertices")
-            if num_removed > 0:
-                print(f"Removed {num_removed} invalid vertices (NaN/Infinity)")
-        sys.exit(0)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    PlyData([vertex_element], text=False).write(output_path)
+    
+    # Save clean .splat version
+    save_as_splat(new_data, output_path.replace('.ply', '.splat'))
+    
+    return len(new_data), num_points - len(new_data)
 '''
 
     # Create a temporary file for the standardized output

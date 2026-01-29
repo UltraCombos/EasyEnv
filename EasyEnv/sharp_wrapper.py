@@ -246,34 +246,55 @@ from plyfile import PlyData, PlyElement
 
 def save_as_splat(data, output_path):
     """Save to 32-byte per splat binary format for Unity/Web."""
+    num_points = len(data)
+    
+    # 1. Position (x, y, z) - 12 bytes
+    pos = np.column_stack([data['x'], data['y'], data['z']]).astype(np.float32)
+    
+    # 2. Scale (exp conversion) - 12 bytes
+    scale = np.column_stack([
+        np.exp(data['scale_0']),
+        np.exp(data['scale_1']),
+        np.exp(data['scale_2'])
+    ]).astype(np.float32)
+    
+    # 3. Color & Opacity (RGBA) - 4 bytes
+    SH_C0 = 0.28209479177387814
+    rgba = np.column_stack([
+        np.clip((0.5 + SH_C0 * data['f_dc_0']) * 255, 0, 255),
+        np.clip((0.5 + SH_C0 * data['f_dc_1']) * 255, 0, 255),
+        np.clip((0.5 + SH_C0 * data['f_dc_2']) * 255, 0, 255),
+        np.clip((1 / (1 + np.exp(-data['opacity']))) * 255, 0, 255)
+    ]).astype(np.uint8)
+    
+    # 4. Rotation (XYZW) - 4 bytes
+    q = np.column_stack([
+        data['rot_0'], data['rot_1'],
+        data['rot_2'], data['rot_3']
+    ]).astype(np.float32)
+    
+    # Normalize quaternions
+    mag = np.linalg.norm(q, axis=1, keepdims=True)
+    q = np.where(mag > 0, q / mag, q)
+    rot = np.clip(q * 128 + 128, 0, 255).astype(np.uint8)
+    
+    # Create structured array for efficient binary packing
+    dtype_splat = np.dtype([
+        ('pos', np.float32, 3),
+        ('scale', np.float32, 3),
+        ('rgba', np.uint8, 4),
+        ('rot', np.uint8, 4)
+    ])
+    
+    splat_data = np.zeros(num_points, dtype=dtype_splat)
+    splat_data['pos'] = pos
+    splat_data['scale'] = scale
+    splat_data['rgba'] = rgba
+    splat_data['rot'] = rot
+    
+    # Write to file
     with open(output_path, 'wb') as f:
-        for row in data:
-            # 1. Position (x, y, z) - 12 bytes
-            f.write(np.float32(row['x']).tobytes())
-            f.write(np.float32(row['y']).tobytes())
-            f.write(np.float32(row['z']).tobytes())
-            
-            # 2. Scale (exp conversion) - 12 bytes
-            f.write(np.exp(np.float32(row['scale_0'])).tobytes())
-            f.write(np.exp(np.float32(row['scale_1'])).tobytes())
-            f.write(np.exp(np.float32(row['scale_2'])).tobytes())
-            
-            # 3. Color & Opacity (RGBA) - 4 bytes
-            SH_C0 = 0.28209479177387814
-            r = np.clip((0.5 + SH_C0 * row['f_dc_0']) * 255, 0, 255).astype(np.uint8)
-            g = np.clip((0.5 + SH_C0 * row['f_dc_1']) * 255, 0, 255).astype(np.uint8)
-            b = np.clip((0.5 + SH_C0 * row['f_dc_2']) * 255, 0, 255).astype(np.uint8)
-            a = np.clip((1 / (1 + np.exp(-row['opacity']))) * 255, 0, 255).astype(np.uint8)
-            f.write(r.tobytes()); f.write(g.tobytes()); f.write(b.tobytes()); f.write(a.tobytes())
-            
-            # 4. Rotation (XYZW) - 4 bytes
-            # Mapping based on standardize_ply logic: rot_1, 2, 3 are XYZ, rot_0 is W
-            # q = np.array([row['rot_1'], row['rot_2'], row['rot_3'], row['rot_0']], dtype=np.float32)
-            q = np.array([row['rot_0'], row['rot_1'], row['rot_2'], row['rot_3']], dtype=np.float32)
-            mag = np.linalg.norm(q)
-            if mag > 0: q /= mag
-            rot_bytes = (q * 128 + 128).clip(0, 255).astype(np.uint8)
-            f.write(rot_bytes.tobytes())
+        f.write(splat_data.tobytes())
 
 def standardize_ply(input_path, output_path):
     """Convert ML-Sharp PLY to industry-standard format."""
@@ -339,7 +360,7 @@ def standardize_ply(input_path, output_path):
     new_data['rot_3'] = filtered_data['rot_0']  # w
 
     # Save clean .splat version
-    save_as_splat(new_data, output_path.replace('.ply', '.splat'))
+    save_as_splat(new_data, output_path.replace('.ply.tmp', '.splat'))
 
     # Create clean PLY with only vertex element
     vertex_element = PlyElement.describe(new_data, 'vertex')
